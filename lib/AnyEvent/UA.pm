@@ -76,13 +76,23 @@ sub new {
 		%{ $args{headers} || {} },
 	};
 	$self->{cv} = $args{cv} || AE::cv;
-	$self->{cookie} //= HTTP::Easy::Cookies->new();
 	#$self->{auth} = {};
 	#$self->{requests} = [];
 	#$self->{domain} = $args{domain} || '.odnoklassniki.ru';
 	$self->{debug} = $args{debug} // 1;
 	$self->{proxy} = $args{proxy} if exists $args{proxy};
+	$self->cookie_jar($args{cookie_jar} // {});
 	$self;
+}
+
+sub cookie_jar {
+	my ($self, $jar) = @_;
+	if (@_ > 1) {
+		$self->{cookie_jar} = ref($jar) eq 'HASH'
+			? HTTP::Easy::Cookies->new($jar)
+			: $jar;
+	}
+	return $self->{cookie_jar};
 }
 
 
@@ -287,7 +297,7 @@ sub rr2 {
 			return $r->error(599, "Proxy not implemented");
 		} else {
 			my $path = $r->{uri}->path_query;
-			my $cookie = $self->{cookie}->encode($self->{cookie}, host => $con->{host}, path => $path);
+			my $cookie = $self->{cookie_jar}->encode($self->{cookie_jar}, host => $con->{host}, path => $path);
 			$r->{headers}{cookie} = $cookie if $cookie;
 			$con->{h}->push_write (
 				"$r->{method} $path HTTP/1.1\015\012" .
@@ -310,9 +320,9 @@ sub rr2 {
 					$hdr->{Reason} = $reason;
 					# TODO: check correctness?
 					#	or return $r->error(599, "Garbled response headers");
-					$self->{cookie}->decode($hdr->{"set-cookie"},  host => $uri->host) if exists $hdr->{"set-cookie"};
-					$self->{cookie}->decode($hdr->{"set-cookie2"}, host => $uri->host) if exists $hdr->{"set-cookie2"};
-					$self->{cookie}->decode($hdr->{"set-cookie3"}, host => $uri->host) if exists $hdr->{"set-cookie3"};
+					$self->{cookie_jar}->decode($hdr->{"set-cookie"},  host => $uri->host) if exists $hdr->{"set-cookie"};
+					$self->{cookie_jar}->decode($hdr->{"set-cookie2"}, host => $uri->host) if exists $hdr->{"set-cookie2"};
+					$self->{cookie_jar}->decode($hdr->{"set-cookie3"}, host => $uri->host) if exists $hdr->{"set-cookie3"};
 
 					my $redirect;
 					my $recurse = 0;# TODO: exists $args{recurse} ? delete $args{recurse} : $MAX_RECURSE;
@@ -380,7 +390,7 @@ sub rr2 {
 						$finish->("", $hdr);
 					}
 					else {
-						#warn dumper $hdr,$self->{cookie};
+						#warn dumper $hdr,$self->{cookie_jar};
 						if (lc $hdr->{'transfer-encoding'} eq 'chunked') {
 							my $body = '';
 							my $get_chunk;$get_chunk = sub {
@@ -491,9 +501,9 @@ sub rr { # request/response
 					# headers, could be optimized a bit
 					$con->unshift_read (line => $qr_nlnl, sub {
 						my $hdr = HTTP::Easy::Headers->decode($_[1], base => $uri);
-						$self->{cookie}->decode($hdr->{"set-cookie"},  host => $uri->host) if exists $hdr->{"set-cookie"};
-						$self->{cookie}->decode($hdr->{"set-cookie2"}, host => $uri->host) if exists $hdr->{"set-cookie2"};
-						$self->{cookie}->decode($hdr->{"set-cookie3"}, host => $uri->host) if exists $hdr->{"set-cookie3"};
+						$self->{cookie_jar}->decode($hdr->{"set-cookie"},  host => $uri->host) if exists $hdr->{"set-cookie"};
+						$self->{cookie_jar}->decode($hdr->{"set-cookie2"}, host => $uri->host) if exists $hdr->{"set-cookie2"};
+						$self->{cookie_jar}->decode($hdr->{"set-cookie3"}, host => $uri->host) if exists $hdr->{"set-cookie3"};
 						# TODO: check correctness?
 						#	or return (%state = (), $cb->(undef, { Status => 599, Reason => "Garbled response headers", URL => $url }));
 
@@ -520,7 +530,7 @@ sub rr { # request/response
 							#%state = ();
 
 							# set-cookie processing
-							$self->{cookie}->decode($_[1]{"set-cookie"}, host => $uri->host);
+							$self->{cookie_jar}->decode($_[1]{"set-cookie"}, host => $uri->host);
 							#$DEBUG_RECV->($_[1]{URL},$_[0],$_[1]) if defined $DEBUG_RECV;
 
 							if ($redirect && exists $hdr->{location}) {
@@ -549,7 +559,7 @@ sub rr { # request/response
 							$finish->("", $hdr);
 						}
 						else {
-							#warn dumper $hdr,$self->{cookie};
+							#warn dumper $hdr,$self->{cookie_jar};
 							if (lc $hdr->{'transfer-encoding'} eq 'chunked') {
 								my $body = '';
 								my $get_chunk;$get_chunk = sub {
@@ -609,7 +619,7 @@ sub req1 {
 			$args{form} ? ( 'content-type' => 'application/x-www-form-urlencoded' ) : (),
 			%{ $args{headers} || {} }
 		},
-		cookie_jar => $self->{cookie},
+		cookie_jar => $self->{cookie_jar},
 		timeout => 10,
 		$self->next_proxy(),
 		cb => sub {
